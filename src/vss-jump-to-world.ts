@@ -1,33 +1,23 @@
-import vss, { actEventCodes, actintItemEvents, ASMode, RoadRuntimeObjId } from "./vss";
+import vss, { actEventCodes, FileOpenFlags, RoadRuntimeObjId } from "./vss";
 
 export function init() {
-    let consumeNextDisableFullscreen = false;
-    vss.addQuantListener("set_road_fullscreen", (payload) => {
-        if (payload.enabled) {
+    const assets = vss.getScriptsFolder() + "/assets/";
+    vss.addQuantListener("runtime_object", (payload) => {
+        if (payload.runtimeObjectId === RoadRuntimeObjId.RTO_GAME_QUANT_ID) {
+            vss.sendEvent(actEventCodes.EV_TELEPORT, 8);
+        }
+    });
+
+    vss.addQuantListener("file_open", (payload) => {
+        const { file, flags } = payload;
+        if ((flags & FileOpenFlags.XS_IN) === 0) {
             return;
         }
 
-        if (consumeNextDisableFullscreen) {
-            consumeNextDisableFullscreen = false;
+        if (vss.isFileExists(assets + file)) {
             return {
-                enabled: true,
+                file: assets + file,
             };
-        }
-    });
-
-    vss.addQuantListener("send_event", (payload) => {
-        if (payload.code === actintItemEvents.ACI_UNLOCK_INTERFACE) {
-            consumeNextDisableFullscreen = true;
-        }
-
-        if (payload.code === actEventCodes.EV_CHANGE_MODE && payload.asMode === ASMode.AS_INV_MODE) {
-            vss.sendEvent(actEventCodes.EV_FULLSCR_CHANGE);
-        }
-    });
-
-    vss.addQuantListener("runtime_object", (payload) => {
-        if (payload.runtimeObjectId === RoadRuntimeObjId.RTO_GAME_QUANT_ID) {
-            vss.sendEvent(actEventCodes.EV_FULLSCR_CHANGE);
         }
     });
 }
