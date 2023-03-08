@@ -1,6 +1,8 @@
+
+import { InitFn } from "./main";
 import vss, { actEventCodes, FileOpenFlags, RoadRuntimeObjId } from "./vss";
 
-export function init() {
+export const init: InitFn = () => {
     const assets = vss.getScriptsFolder() + "/assets/";
     vss.addQuantListener("runtime_object", (payload) => {
         if (payload.runtimeObjectId === RoadRuntimeObjId.RTO_GAME_QUANT_ID) {

@@ -7,14 +7,23 @@ export type VssQuantResult<K extends keyof VssQuantMap> = void | undefined | "pr
 
 export interface VssQuantMap {
     "ready": [void, void],
+    "tick": [void, void],
+    "frame": [VssFrameQuant, void]
     "runtime_object": [VssRuntimeObjectQuant, void],
     "scaled_renderer": [VssScaledRendererQuant, void],
     "option": [VssOptionQuant, VssOptionQuantResult],
     "camera": [VssCameraQuant, VssCameraQuantResult],
+    "camera_zoom": [VssCameraZoomQuant, VssCameraZoomQuantResult],
     "mechos_traction": [VssMechosTractionQuant, VssMechosTractionQuantResult],
     "send_event": [VssSendEventQuant, void],
     "set_road_fullscreen": [VssRoadFullScreenQuant, VssRoadFullScreenQuantResult],
     "file_open": [VssFileOpenQuant, VssFileOpenQuantResult],
+    "pause": [VssPauseQuant, void],
+    "redraw_begin": [void, void],
+    "redraw": [VssRedrawQuant, void],
+    "check_xy": [VssCheckXYQuant, void]
+    "redraw_end": [void, void],
+    "network_state": [VssNetworkState, void],
 }
 
 export interface VssRuntimeObjectQuant {
@@ -41,6 +50,13 @@ export interface VssCameraQuant {
 export interface VssCameraQuantResult {
     turnAngle?: number;
     slopeAngle?: number;
+}
+
+export interface VssCameraZoomQuant {
+    z: number,
+}
+export interface VssCameraZoomQuantResult {
+    z?: number;
 }
 
 export interface VssMechosTractionQuant {
@@ -86,12 +102,43 @@ export interface VssFileOpenQuantResult {
     file?: string,
 }
 
-export type VssQuantListener<K extends VssQuantName> = (payload: VssQuantPayload<K>,
+export interface VssPauseQuant {
+    paused: boolean,
+}
+
+export interface VssFrameQuant {
+    frame: Uint8Array,
+    width: number,
+    height: number,
+    bpp: number,
+}
+
+export interface VssRedrawQuant {
+    type: "iScreenObject" | "iScreenElement",
+    id: number,
+    elementType?: iElementTypes,
+}
+
+export type VssCheckXYQuant = VssRedrawQuant;
+
+export interface VssNetworkState {
+    on: boolean,
+}
+
+export type VssQuantListener<K extends VssQuantName> = (payload: VssQuantPayload<K> & { quant: K },
     stopPropogation: () => void, quant: K) => VssQuantResult<K>;
+
+export type VssQuantResultListener<K extends VssQuantName> = (payload: VssQuantPayload<K> & { quant: K },
+    result: VssQuantMap[K][1] &
+    {
+        handled: boolean,
+        preventDefault: boolean
+    }) => void;
 
 export class VssMath {
     PI = 1 << 11;
     PI_2 = this.PI / 2;
+    PIx2 = this.PI * 2;
 
     angleToRadians(angle: number) {
         return angle * Math.PI / this.PI;
@@ -110,6 +157,7 @@ class Vss {
     math = new VssMath();
 
     private quantListeners: { [quantName: string]: VssQuantListener<any>[] } = {};
+    private quantResultListeners: { [quantName: string]: VssQuantResultListener<any>[] } = {};
 
     constructor() {
         this.scripts = bridge.scripts().filter((value) => {
@@ -128,6 +176,11 @@ class Vss {
     sendEvent = bridge.sendEvent;
     isKeyPressed = bridge.isKeyPressed;
     isFileExists = bridge.isFileExists;
+    getRgbaData = bridge.getRgbaData;
+    toBase64 = bridge.toBase64;
+    getShopItem = bridge.getShopItem;
+    readLocalStorage = bridge.readLocalStorage;
+    writeLocalStorage = bridge.writeLocalStorage;
 
     addQuantListener<K extends VssQuantName>(quant: K, listener: VssQuantListener<K>) {
         if (this.quantListeners[quant] === undefined) {
@@ -143,12 +196,29 @@ class Vss {
         }
     }
 
+    addQuantResultListener<K extends VssQuantName>(quant: K, listener: VssQuantResultListener<K>) {
+        if (this.quantResultListeners[quant] === undefined) {
+            this.quantResultListeners[quant] = [];
+        }
+        this.quantResultListeners[quant].push(listener);
+    }
+
+    removeQuantResultListener<K extends VssQuantName>(quant: K, listener: VssQuantResultListener<K>) {
+        const index = this.quantResultListeners[quant]?.indexOf(listener);
+        if (index !== undefined && index !== -1) {
+            this.quantResultListeners[quant].splice(index, 1);
+        }
+    }
+
     private onVssQuant<K extends VssQuantName>(quant: K, payload: VssQuantPayload<K>) {
         const listeners = this.quantListeners[quant];
         if (listeners === undefined || listeners.length === 0) {
             return undefined;
         }
 
+        if (payload) {
+            (payload as any).quant = quant;
+        }
 
         const resultRef = {
             result: {
@@ -174,6 +244,10 @@ class Vss {
         }
 
         resultRef.result.handled = Object.keys(resultRef.result).length > 1;
+        const resultListeners = this.quantResultListeners[quant] || [];
+        for (const next of resultListeners) {
+            next(payload, resultRef.result);
+        }
         return resultRef.result;
     }
 }
@@ -182,7 +256,10 @@ class Vss {
  * Vangers Scripting Subsystem exports `vss` object as entry point to game API
  * you must use it to interact with game.
  */
-const vss = new Vss();
+const vss: Vss = global.vss === undefined ? (() => {
+    global.vss = new Vss();
+    return global.vss;
+})() : global.vss;
 export default vss;
 
 /* eslint-disable no-unused-vars */
@@ -193,12 +270,29 @@ interface VssNative {
     scripts(): string[];
     getScriptsFolder(): string;
     initScripts(folder: string): void;
-    sendEvent(code: actEventCodes, data: number): void;
+    sendEvent(code: actEventCodes, data?: number): void;
     isKeyPressed(scanCode: number): boolean;
     isFileExists(file: string): boolean;
+    getRgbaData(frame: Uint8Array,
+        frameWidth: number,
+        startX: number,
+        startY: number,
+        width: number,
+        height: number,
+        rgbaData: Uint8Array): void;
+    toBase64(data: Uint8Array): string;
+    getShopItem(): MechosShopItem;
+    readLocalStorage(): string;
+    writeLocalStorage(ls: string): void;
 }
 
 // == in game definitions
+export interface MechosShopItem {
+    internalId: number;
+    mechosName: string;
+    type: number;
+}
+
 export enum RoadRuntimeObjId {
     RTO_GAME_QUANT_ID = 1,
     RTO_LOADING1_ID, // 2
@@ -753,6 +847,10 @@ export enum actEventCodes {
     EV_GET_RUBOX,
     EV_INIT_AVI_OBJECT,
 
+    EV_VSS_CAMERA_ROT_EVENT,
+    EV_VSS_CAMERA_ZOOM_EVENT,
+    EV_VSS_CAMERA_PERSP_EVENT,
+
     EV_MAX_CODE
 };
 
@@ -792,4 +890,14 @@ export enum FileOpenFlags {
     XS_NOSHARING = 0x0020,
     XS_SHAREREAD = 0x0040,
     XS_SHAREWRITE = 0x0080,
+};
+
+export enum iElementTypes {
+	I_STRING_ELEM,
+	I_BITMAP_ELEM,
+	I_SCROLLER_ELEM,
+	I_TERRAIN_ELEM,
+	I_S_STRING_ELEM,
+	I_AVI_ELEM,
+	I_AVI_BORDER_ELEM
 };
